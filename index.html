@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+    <style>
+        :root { --sr-blue: #003087; --sr-gold: #C5A059; --sr-red: #D32F2F; }
+        body { font-family: sans-serif; background: #f4f7f9; margin: 0; padding: 15px; }
+        
+        /* 10-Slot Grid */
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 20px; }
+        .slot { background: white; border-left: 5px solid var(--sr-blue); padding: 12px; border-radius: 8px; min-height: 85px; position: relative; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+        .slot.empty { border-left: 2px dashed #ccc; background: #fafafa; color: #999; }
+        
+        /* Search & Navigation */
+        input { width: 100%; padding: 15px; font-size: 18px; border: 2px solid #ddd; border-radius: 10px; box-sizing: border-box; }
+        .panel { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: white; display: none; padding: 20px; box-sizing: border-box; z-index: 999; overflow-y: auto; }
+        
+        /* Action Buttons */
+        .btn { width: 100%; padding: 15px; border: none; border-radius: 8px; font-weight: bold; margin-top: 10px; cursor: pointer; }
+        .btn-audit { background: var(--sr-gold); color: white; }
+        .btn-close { background: #eee; color: #333; }
+    </style>
+</head>
+<body>
+
+    <input type="text" id="crsInput" placeholder="Enter Station (e.g. CYK, GLC)" maxlength="3">
+    <div id="results" style="margin-top:10px;"></div>
+
+    <div class="grid" id="journeyGrid"></div>
+
+    <div id="detailPanel" class="panel">
+        <h2 id="pTitle">Journey</h2>
+        <div id="pContent"></div>
+        <button class="btn btn-audit" onclick="runAudit()">Run Historical Audit</button>
+        <div id="auditOutput" style="margin-top:20px; font-size: 14px;"></div>
+        <button class="btn btn-close" onclick="closePanel()">Back to 10 Slots</button>
+    </div>
+
+    <script>
+        let slots = JSON.parse(localStorage.getItem('sr_slots')) || new Array(10).fill(null);
+        let activeRID = null;
+
+        // Auto-Trigger on 3rd letter
+        document.getElementById('crsInput').addEventListener('input', async (e) => {
+            if (e.target.value.length === 3) {
+                const res = await fetch('https://scotrail-bridge.vercel.app/api/darwin', {
+                    method: 'POST', headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ crs: e.target.value.toUpperCase() })
+                });
+                const data = await res.json();
+                renderResults(data.services || []);
+            }
+        });
+
+        function renderResults(services) {
+            const out = document.getElementById('results');
+            out.innerHTML = services.slice(0,5).map(s => `
+                <div onclick="saveSlot('${s.std} to ${s.destination}', '${s.rid}')" 
+                     style="padding:10px; border-bottom:1px solid #eee; background:white;">
+                    <strong>${s.std}</strong> ${s.destination} (${s.etd})
+                </div>
+            `).join('');
+        }
+
+        function saveSlot(summary, rid) {
+            const idx = slots.findIndex(s => s === null);
+            if (idx !== -1) {
+                slots[idx] = { summary, rid };
+                localStorage.setItem('sr_slots', JSON.stringify(slots));
+                document.getElementById('results').innerHTML = '';
+                document.getElementById('crsInput').value = '';
+                renderGrid();
+            }
+        }
+
+        function renderGrid() {
+            const g = document.getElementById('journeyGrid');
+            g.innerHTML = slots.map((s, i) => `
+                <div class="slot ${s ? '' : 'empty'}" onclick="${s ? `openPanel(${i})` : ''}">
+                    <small>SLOT ${i+1}</small><br>
+                    <strong>${s ? s.summary : 'Empty'}</strong>
+                </div>
+            `).join('');
+        }
+
+        function openPanel(i) {
+            const s = slots[i];
+            activeRID = s.rid;
+            document.getElementById('detailPanel').style.display = 'block';
+            document.getElementById('pTitle').innerText = s.summary;
+            document.getElementById('pContent').innerText = "RID: " + s.rid;
+            document.getElementById('auditOutput').innerHTML = '';
+        }
+
+        async function runAudit() {
+            document.getElementById('auditOutput').innerHTML = "Accessing Rockshore Bridge...";
+            const res = await fetch('https://scotrail-bridge.vercel.app/api/rockshore', {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ rid: activeRID })
+            });
+            const data = await res.json();
+            const stops = data.serviceDetails.locations.map(l => 
+                `<div>${l.location}: ${l.gbtt_pta || 'Start'} -> ${l.actual_pta || 'TBC'}</div>`
+            ).join('');
+            document.getElementById('auditOutput').innerHTML = stops;
+        }
+
+        function closePanel() { document.getElementById('detailPanel').style.display = 'none'; }
+        renderGrid();
+    </script>
+</body>
+</html>
