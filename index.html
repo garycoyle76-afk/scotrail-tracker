@@ -1,51 +1,64 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>ScotRail Bulletproof Tracker</title>
     <style>
-        :root { --sr-blue: #003087; --sr-gold: #C5A059; --sr-red: #D32F2F; }
-        body { font-family: sans-serif; background: #f4f7f9; margin: 0; padding: 15px; }
+        :root { --sr-blue: #003087; --sr-gold: #C5A059; --sr-red: #D32F2F; --sr-grey: #666; }
+        body { font-family: -apple-system, sans-serif; background: #f0f4f8; margin: 0; padding: 15px; }
         
-        /* 10-Slot Grid */
-        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 20px; }
-        .slot { background: white; border-left: 5px solid var(--sr-blue); padding: 12px; border-radius: 8px; min-height: 85px; position: relative; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
-        .slot.empty { border-left: 2px dashed #ccc; background: #fafafa; color: #999; }
-        
-        /* Search & Navigation */
-        input { width: 100%; padding: 15px; font-size: 18px; border: 2px solid #ddd; border-radius: 10px; box-sizing: border-box; }
-        .panel { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: white; display: none; padding: 20px; box-sizing: border-box; z-index: 999; overflow-y: auto; }
-        
-        /* Action Buttons */
+        /* Search Bar */
+        .search-box { background: white; padding: 15px; border-radius: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
+        input { width: 100%; padding: 12px; font-size: 18px; border: 2px solid #eee; border-radius: 8px; box-sizing: border-box; }
+        .results { max-height: 200px; overflow-y: auto; margin-top: 10px; border-top: 1px solid #eee; }
+        .res-item { padding: 12px; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; cursor: pointer; }
+
+        /* 10 Journey Slots */
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 20px; }
+        .slot { 
+            background: white; border-left: 5px solid var(--sr-blue); border-radius: 8px; 
+            padding: 12px; min-height: 80px; position: relative; box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+        }
+        .slot.empty { border-left-color: #ccc; border-style: dashed; opacity: 0.5; }
+        .slot-title { font-size: 11px; color: var(--sr-blue); font-weight: bold; margin-bottom: 5px; }
+        .clear { position: absolute; top: 5px; right: 5px; border: none; background: none; color: var(--sr-red); font-weight: bold; padding: 5px; cursor: pointer; }
+
+        /* Floating Overlay */
+        .overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: white; z-index: 1000; display: none; padding: 25px; box-sizing: border-box; }
         .btn { width: 100%; padding: 15px; border: none; border-radius: 8px; font-weight: bold; margin-top: 10px; cursor: pointer; }
-        .btn-audit { background: var(--sr-gold); color: white; }
-        .btn-close { background: #eee; color: #333; }
+        .btn-gold { background: var(--sr-gold); color: white; }
     </style>
 </head>
 <body>
 
-    <input type="text" id="crsInput" placeholder="Enter Station (e.g. CYK, GLC)" maxlength="3">
-    <div id="results" style="margin-top:10px;"></div>
+    <div class="search-box">
+        <input type="text" id="stationInput" placeholder="Enter Station Code (e.g. CYK)" maxlength="3">
+        <div id="results" class="results"></div>
+    </div>
 
     <div class="grid" id="journeyGrid"></div>
 
-    <div id="detailPanel" class="panel">
-        <h2 id="pTitle">Journey</h2>
-        <div id="pContent"></div>
-        <button class="btn btn-audit" onclick="runAudit()">Run Historical Audit</button>
-        <div id="auditOutput" style="margin-top:20px; font-size: 14px;"></div>
-        <button class="btn btn-close" onclick="closePanel()">Back to 10 Slots</button>
+    <div id="detailOverlay" class="overlay">
+        <button onclick="closeOverlay()" style="float:right; border:none; background:none; font-size: 24px;">×</button>
+        <h2 id="oTitle">Journey Detail</h2>
+        <div id="oContent"></div>
+        <button class="btn btn-gold" onclick="fetchHistory()">Run Historical Audit (Rockshore)</button>
+        <div id="oHistory" style="margin-top:20px; font-size: 14px;"></div>
+        <button class="btn" style="background:#eee;" onclick="closeOverlay()">Back to Slots</button>
     </div>
 
     <script>
         let slots = JSON.parse(localStorage.getItem('sr_slots')) || new Array(10).fill(null);
-        let activeRID = null;
+        let currentRID = null;
 
-        // Auto-Trigger on 3rd letter
-        document.getElementById('crsInput').addEventListener('input', async (e) => {
-            if (e.target.value.length === 3) {
+        // Auto-Trigger Search
+        document.getElementById('stationInput').addEventListener('input', async (e) => {
+            const val = e.target.value.toUpperCase();
+            if (val.length === 3) {
                 const res = await fetch('https://scotrail-bridge.vercel.app/api/darwin', {
                     method: 'POST', headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ crs: e.target.value.toUpperCase() })
+                    body: JSON.stringify({ crs: val })
                 });
                 const data = await res.json();
                 renderResults(data.services || []);
@@ -53,59 +66,61 @@
         });
 
         function renderResults(services) {
-            const out = document.getElementById('results');
-            out.innerHTML = services.slice(0,5).map(s => `
-                <div onclick="saveSlot('${s.std} to ${s.destination}', '${s.rid}')" 
-                     style="padding:10px; border-bottom:1px solid #eee; background:white;">
-                    <strong>${s.std}</strong> ${s.destination} (${s.etd})
-                </div>
-            `).join('');
+            const container = document.getElementById('results');
+            container.innerHTML = services.length ? '' : 'No ScotRail services.';
+            services.slice(0, 5).forEach(s => {
+                const div = document.createElement('div');
+                div.className = 'res-item';
+                div.innerHTML = `<div><strong>${s.std}</strong> to ${s.destination}</div><span>${s.etd}</span>`;
+                div.onclick = () => saveToSlot(s);
+                container.appendChild(div);
+            });
         }
 
-        function saveSlot(summary, rid) {
-            const idx = slots.findIndex(s => s === null);
+        function saveToSlot(s) {
+            const idx = slots.findIndex(slot => slot === null);
             if (idx !== -1) {
-                slots[idx] = { summary, rid };
+                slots[idx] = { title: `${s.std} to ${s.destination}`, rid: s.rid, status: s.etd };
                 localStorage.setItem('sr_slots', JSON.stringify(slots));
+                document.getElementById('stationInput').value = '';
                 document.getElementById('results').innerHTML = '';
-                document.getElementById('crsInput').value = '';
                 renderGrid();
             }
         }
 
         function renderGrid() {
-            const g = document.getElementById('journeyGrid');
-            g.innerHTML = slots.map((s, i) => `
-                <div class="slot ${s ? '' : 'empty'}" onclick="${s ? `openPanel(${i})` : ''}">
-                    <small>SLOT ${i+1}</small><br>
-                    <strong>${s ? s.summary : 'Empty'}</strong>
+            const grid = document.getElementById('journeyGrid');
+            grid.innerHTML = slots.map((s, i) => `
+                <div class="slot ${s ? '' : 'empty'}" onclick="${s ? `openOverlay(${i})` : ''}">
+                    <div class="slot-title">SLOT ${i+1}</div>
+                    ${s ? `<button class="clear" onclick="clearSlot(event, ${i})">×</button><strong>${s.title}</strong><br><small>${s.status}</small>` : 'Empty'}
                 </div>
             `).join('');
         }
 
-        function openPanel(i) {
+        function openOverlay(i) {
             const s = slots[i];
-            activeRID = s.rid;
-            document.getElementById('detailPanel').style.display = 'block';
-            document.getElementById('pTitle').innerText = s.summary;
-            document.getElementById('pContent').innerText = "RID: " + s.rid;
-            document.getElementById('auditOutput').innerHTML = '';
+            currentRID = s.rid;
+            document.getElementById('detailOverlay').style.display = 'block';
+            document.getElementById('oTitle').innerText = s.title;
+            document.getElementById('oContent').innerHTML = `<p>RID: ${s.rid}</p><p>Live: ${s.status}</p>`;
+            document.getElementById('oHistory').innerHTML = '';
         }
 
-        async function runAudit() {
-            document.getElementById('auditOutput').innerHTML = "Accessing Rockshore Bridge...";
+        async function fetchHistory() {
+            document.getElementById('oHistory').innerHTML = "Fetching Performance Audit...";
             const res = await fetch('https://scotrail-bridge.vercel.app/api/rockshore', {
                 method: 'POST', headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ rid: activeRID })
+                body: JSON.stringify({ rid: currentRID })
             });
             const data = await res.json();
-            const stops = data.serviceDetails.locations.map(l => 
-                `<div>${l.location}: ${l.gbtt_pta || 'Start'} -> ${l.actual_pta || 'TBC'}</div>`
+            document.getElementById('oHistory').innerHTML = data.serviceDetails.locations.map(l => 
+                `<div>${l.location}: Plan ${l.gbtt_pta || 'Start'} | Actual ${l.actual_pta || 'TBC'}</div>`
             ).join('');
-            document.getElementById('auditOutput').innerHTML = stops;
         }
 
-        function closePanel() { document.getElementById('detailPanel').style.display = 'none'; }
+        function clearSlot(e, i) { e.stopPropagation(); slots[i] = null; localStorage.setItem('sr_slots', JSON.stringify(slots)); renderGrid(); }
+        function closeOverlay() { document.getElementById('detailOverlay').style.display = 'none'; }
         renderGrid();
     </script>
 </body>
